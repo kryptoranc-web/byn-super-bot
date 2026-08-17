@@ -9,8 +9,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-RENDER_URL = os.getenv("RENDER_URL")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+RENDER_URL = os.environ.get("RENDER_URL")
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не найден! Проверьте переменные окружения.")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -84,14 +87,11 @@ async def analysis(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-async def set_webhook():
+async def main():
     await bot.delete_webhook()
     if RENDER_URL:
         await bot.set_webhook(f"{RENDER_URL}/webhook")
-
-async def main():
-    await set_webhook()
-    logging.info("Бот запущен через webhook")
+    logging.info("✅ Бот успешно запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
