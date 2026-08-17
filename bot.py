@@ -88,10 +88,9 @@ async def analysis(callback: types.CallbackQuery):
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
 async def main():
-    await bot.delete_webhook()
-    if RENDER_URL:
-        await bot.set_webhook(f"{RENDER_URL}/webhook")
-    logging.info("✅ Бот успешно запущен!")
+    # Принудительно удаляем webhook перед запуском
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("✅ Webhook удалён, запускаем polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
