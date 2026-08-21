@@ -2007,14 +2007,23 @@ async def handle_messages(message: types.Message):
     else:
         await message.answer(response["text"], parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-# ======================
+# ============================================================
 # ЗАПУСК БОТА
-# ======================
+# ============================================================
+
+# Глобальный сет для хранения ссылок на фоновые задачи
+background_tasks = set()
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("✅ Бот запущен")
-    asyncio.create_task(update_data())
+    
+    # Создаём фоновую задачу и сохраняем ссылку на неё
+    task = asyncio.create_task(update_data())
+    background_tasks.add(task)
+    # Удаляем из сета, когда задача завершится (если она не бесконечная)
+    task.add_done_callback(background_tasks.discard)
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
