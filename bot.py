@@ -2007,9 +2007,9 @@ async def handle_messages(message: types.Message):
     else:
         await message.answer(response["text"], parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-# ============================================================
+# ======================
 # ЗАПУСК БОТА
-# ============================================================
+# ======================
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
