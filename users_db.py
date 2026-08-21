@@ -1,137 +1,123 @@
+import sqlite3
 import json
-import os
 from datetime import datetime
 
-DB_FILE = "users.json"
-
 class UserDB:
-    def __init__(self):
-        self.data = {"users": []}
-        self.load()
+    def __init__(self, db_file="users.db"):
+        self.db_file = db_file
+        self._init_db()
 
-    def load(self):
-        if os.path.exists(DB_FILE):
-            with open(DB_FILE, 'r') as f:
-                self.data = json.load(f)
+    def _get_connection(self):
+        conn = sqlite3.connect(self.db_file)
+        conn.row_factory = sqlite3.Row
+        return conn
 
-    def save(self):
-        with open(DB_FILE, 'w') as f:
-            json.dump(self.data, f, indent=4, default=str)
+    def _init_db(self):
+        with self._get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    status TEXT,
+                    trial_start TEXT,
+                    trial_end TEXT,
+                    subscription_end TEXT,
+                    bonus_days INTEGER,
+                    referrals TEXT,
+                    referred_by INTEGER,
+                    payment_history TEXT,
+                    forecast_history TEXT,
+                    is_blocked BOOLEAN,
+                    language TEXT,
+                    city TEXT,
+                    agreement_accepted BOOLEAN
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    code TEXT,
+                    amount TEXT,
+                    created_at TEXT
+                )
+            """)
+            conn.commit()
 
     def get_user(self, user_id):
-        for user in self.data["users"]:
-            if user["id"] == user_id:
-                return user
-        return None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            user = dict(row)
+            user["referrals"] = json.loads(user["referrals"] or "[]")
+            user["payment_history"] = json.loads(user["payment_history"] or "[]")
+            user["forecast_history"] = json.loads(user["forecast_history"] or "[]")
+            user["is_blocked"] = bool(user["is_blocked"])
+            user["agreement_accepted"] = bool(user["agreement_accepted"])
+            return user
 
     def add_user(self, user_data):
-        if not self.get_user(user_data["id"]):
-            self.data["users"].append(user_data)
-            self.save()
-            return True
-        return False
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO users 
+                (id, username, first_name, status, trial_start, trial_end, subscription_end, 
+                 bonus_days, referrals, referred_by, payment_history, forecast_history, 
+                 is_blocked, language, city, agreement_accepted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_data["id"], user_data.get("username"), user_data.get("first_name"),
+                user_data.get("status", "trial"), user_data.get("trial_start"),
+                user_data.get("trial_end"), user_data.get("subscription_end"),
+                user_data.get("bonus_days", 0), json.dumps(user_data.get("referrals", [])),
+                user_data.get("referred_by"), json.dumps(user_data.get("payment_history", [])),
+                json.dumps(user_data.get("forecast_history", [])), int(user_data.get("is_blocked", False)),
+                user_data.get("language", "ru"), user_data.get("city", "Минск"),
+                int(user_data.get("agreement_accepted", False))
+            ))
+            conn.commit()
 
     def update_user(self, user_id, update_data):
         user = self.get_user(user_id)
-        if user:
-            user.update(update_data)
-            self.save()
-            return True
-        return False
-
-    def get_language(self, user_id):
-        user = self.get_user(user_id)
-        return user.get("language", "ru") if user else "ru"
-
-    def set_language(self, user_id, lang):
-        user = self.get_user(user_id)
-        if user:
-            user["language"] = lang
-            self.save()
-            return True
-        return False
-
-    def get_city(self, user_id):
-        user = self.get_user(user_id)
-        return user.get("city", "Минск") if user else "Минск"
-
-    def set_city(self, user_id, city):
-        user = self.get_user(user_id)
-        if user:
-            user["city"] = city
-            self.save()
-            return True
-        return False
+        if not user:
+            return
+        user.update(update_data)
+        self.add_user(user)
 
     def has_accepted_agreement(self, user_id):
         user = self.get_user(user_id)
         return user.get("agreement_accepted", False) if user else False
 
     def accept_agreement(self, user_id):
-        user = self.get_user(user_id)
-        if user:
-            user["agreement_accepted"] = True
-            user["agreement_date"] = datetime.now().isoformat()
-            self.save()
-            return True
-        return False
+        self.update_user(user_id, {"agreement_accepted": True})
 
-    def add_referral(self, referrer_id, referred_id):
+    def get_language(self, user_id):
+        user = self.get_user(user_id)
+        return user.get("language", "ru") if user else "ru"
+
+    def get_city(self, user_id):
+        user = self.get_user(user_id)
+        return user.get("city", "Минск") if user else "Минск"
+
+    def set_city(self, user_id, city):
+        self.update_user(user_id, {"city": city})
+
+    def add_referral(self, referrer_id, referee_id):
         referrer = self.get_user(referrer_id)
         if referrer:
-            if "referrals" not in referrer:
-                referrer["referrals"] = []
-            if referred_id not in referrer["referrals"]:
-                referrer["referrals"].append(referred_id)
-                self.save()
-                return True
-        return False
+            refs = referrer.get("referrals", [])
+            if referee_id not in refs:
+                refs.append(referee_id)
+                self.update_user(referrer_id, {"referrals": refs})
 
-    def get_referral_stats(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return None
-        return {
-            "total_referrals": len(user.get("referrals", [])),
-            "active_referrals": len([r for r in user.get("referrals", []) if self.get_user(r) and self.get_user(r).get("status") == "active"]),
-            "bonus_days": user.get("bonus_days", 0)
-        }
-
-    def add_pending_payment(self, user_id, payment_code, amount):
-        user = self.get_user(user_id)
-        if not user:
-            return False
-        if "pending_payments" not in user:
-            user["pending_payments"] = []
-        user["pending_payments"].append({
-            "code": payment_code,
-            "amount": amount,
-            "timestamp": datetime.now().isoformat(),
-            "status": "pending"
-        })
-        self.save()
+    def add_pending_payment(self, user_id, code, amount):
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO pending_payments (user_id, code, amount, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, code, amount, datetime.now().isoformat()))
+            conn.commit()
         return True
-
-    def get_pending_payment(self, payment_code):
-        for user in self.data["users"]:
-            for payment in user.get("pending_payments", []):
-                if payment["code"] == payment_code and payment["status"] == "pending":
-                    return user["id"], payment
-        return None, None
-
-    def approve_payment(self, payment_code):
-        user_id, payment = self.get_pending_payment(payment_code)
-        if not user_id:
-            return None
-        payment["status"] = "approved"
-        user = self.get_user(user_id)
-        if "payment_history" not in user:
-            user["payment_history"] = []
-        user["payment_history"].append({
-            "date": datetime.now().isoformat(),
-            "amount": payment["amount"],
-            "code": payment_code,
-            "status": "approved"
-        })
-        self.save()
-        return user_id
