@@ -2,7 +2,11 @@ from datetime import datetime
 from users_db import UserDB
 
 db = UserDB()
-ADMIN_ID = 123456789  # ЗАМЕНИТЕ НА ВАШ ID
+
+# ============================================================
+# ВАШ TELEGRAM ID (уже вставлен!)
+# ============================================================
+ADMIN_ID = 8064308550  # ✅ ВАШ ID
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -78,4 +82,4 @@ def get_forecast_stats():
         "accuracy": round(accuracy, 1),
         "usd": {"total": usd_forecasts["total"], "correct": usd_forecasts["correct"], "accuracy": round(usd_accuracy, 1)},
         "eur": {"total": eur_forecasts["total"], "correct": eur_forecasts["correct"], "accuracy": round(eur_accuracy, 1)}
-  }
+    }
