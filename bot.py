@@ -145,7 +145,7 @@ async def check_spam(user_id):
     USER_LAST_MESSAGE[user_id] = now
     return False
 
-# ==================== КОМАНДА /START (НОВАЯ ВЕРСИЯ) ====================
+# ==================== КОМАНДА /START ====================
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -153,10 +153,8 @@ async def start(message: types.Message):
     username = message.from_user.username or "без username"
     first_name = message.from_user.first_name or "пользователь"
     
-    # Проверяем, есть ли пользователь в базе
     user = db.get_user(user_id)
     
-    # Если пользователь уже принял соглашение — сразу показываем главное меню
     if user and db.has_accepted_agreement(user_id):
         lang = get_user_lang(user_id)
         await message.answer(
@@ -167,8 +165,6 @@ async def start(message: types.Message):
         )
         return
     
-    # Если пользователь НЕ принял соглашение — показываем приветствие
-    # Проверяем, есть ли реферал
     args = message.text.split()
     referral_id = None
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -177,7 +173,6 @@ async def start(message: types.Message):
         except:
             pass
     
-    # Если пользователь новый — регистрируем
     if not user:
         new_user = {
             "id": user_id, "username": username, "first_name": first_name,
@@ -189,7 +184,6 @@ async def start(message: types.Message):
         }
         db.add_user(new_user)
         
-        # Если есть реферал — даём бонус
         if referral_id and is_valid_referral(referral_id, user_id):
             db.update_user(user_id, {"trial_end": (datetime.now() + timedelta(days=TRIAL_DAYS + 3)).isoformat()})
             db.add_referral(referral_id, user_id)
@@ -198,7 +192,6 @@ async def start(message: types.Message):
             except:
                 pass
     
-    # Показываем приветствие с преимуществами
     await message.answer(
         WELCOME_TEXT,
         parse_mode="Markdown",
@@ -390,7 +383,7 @@ async def get_banks_callback(callback: types.CallbackQuery):
 
 # ==================== ОСТАЛЬНЫЕ КОМАНДЫ ====================
 
-@dp.callback_query(lambda c: c.data == "lang_")
+@dp.callback_query(lambda c: c.data == "change_lang")
 async def show_languages(callback: types.CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
@@ -484,10 +477,112 @@ async def analysis(callback: types.CallbackQuery):
     text = (f"📈 *Анализ рынка*\n\n🇺🇸 USD/BYN: {usd_rate}\n🇪🇺 EUR/BYN: {eur_rate}\n🇷🇺 USD/RUB: {forex.get('usd_rub', '—')}\n🌍 DXY: {forex.get('dxy', '—')}\n🛢️ Brent: {forex.get('brent', '—')}\n🇪🇺 EUR/USD: {forex.get('eur_usd', '—')}\n\n💡 *Влияние на курс BYN:*\n• Российский рубль — ключевой фактор\n• Цена нефти влияет на RUB\n• 20-е числа — налоговый период\n• Корреляция с USD/RUB: 0.89")
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-# ==================== ОСТАЛЬНЫЕ КОМАНДЫ (ПРОФИЛЬ, ПОДПИСКА, РЕФЕРАЛЫ, ПОДДЕРЖКА) ====================
+@dp.callback_query(lambda c: c.data == "subscribe")
+async def subscribe_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    payment = generate_erip_payment(user_id)
+    text = f"💳 *Оформление подписки*\n\n💳 Номер карты: {payment['receiver_card']}\n🏦 Банк: {payment['receiver_bank']}\n💰 Сумма: {payment['amount']}\n📋 Назначение: {payment['purpose']}\n\n🔗 Ссылка: {payment['erip_link']}\n\nПосле оплаты нажмите /confirm_payment"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+@dp.callback_query(lambda c: c.data == "referral")
+async def referral_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    user = db.get_user(user_id)
+    if not user:
+        await callback.message.edit_text("Вы не зарегистрированы. Напишите /start", reply_markup=main_menu(user_id))
+        return
+    
+    referral_link = f"https://t.me/byn_investor_bot?start=ref_{user_id}"
+    stats = db.get_referral_stats(user_id)
+    text = f"👥 *Реферальная программа*\n\n🔗 *Ваша ссылка:*\n`{referral_link}`\n\n📊 *Статистика:*\n• Приглашено: {stats['total_referrals'] if stats else 0}\n• Активных: {stats['active_referrals'] if stats else 0}\n• Бонусных дней: {stats['bonus_days'] if stats else 0}"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+@dp.callback_query(lambda c: c.data == "support")
+async def support_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    await callback.message.edit_text(
+        "🤖 *Консультант*\n\nНапишите ваш вопрос. Если я не смогу ответить — переключу на эксперта.",
+        parse_mode="Markdown",
+        reply_markup=main_menu(user_id)
+    )
+
+@dp.callback_query(lambda c: c.data == "profile")
+async def profile_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    user = db.get_user(user_id)
+    if not user:
+        await callback.message.edit_text("Вы не зарегистрированы. Напишите /start", reply_markup=main_menu(user_id))
+        return
+    
+    status = get_subscription_status(user_id)
+    city = get_user_city(user_id)
+    text = f"📊 *Ваш профиль*\n\n👤 Имя: {user.get('first_name')}\n🌍 Город: {city}\n📌 Статус: {status}\n"
+    if status == "trial":
+        text += f"⏳ Пробный период до: {user.get('trial_end')}"
+    elif status == "active":
+        text += f"✅ Подписка до: {user.get('subscription_end')}"
+    else:
+        text += "❌ Подписка истекла"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+@dp.callback_query(lambda c: c.data == "agreement")
+async def agreement_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    user = db.get_user(user_id)
+    
+    if user and db.has_accepted_agreement(user_id):
+        await callback.message.edit_text(
+            "✅ Вы уже приняли соглашение.\n\n"
+            "Вы можете перечитать его ниже:",
+            parse_mode="Markdown"
+        )
+    
+    await callback.message.edit_text(
+        AGREEMENT_TEXT,
+        parse_mode="Markdown",
+        reply_markup=agreement_keyboard()
+    )
+
+@dp.message(Command("subscribe"))
+async def subscribe_command(message: types.Message):
+    user_id = message.from_user.id
+    if not db.has_accepted_agreement(user_id):
+        await message.answer("⚠️ Сначала примите соглашение: /agreement")
+        return
+    if not db.get_user(user_id):
+        await message.answer("Вы не зарегистрированы. Напишите /start")
+        return
+    payment = generate_erip_payment(user_id)
+    text = f"💳 *Оформление подписки*\n\n💳 Номер карты: {payment['receiver_card']}\n🏦 Банк: {payment['receiver_bank']}\n💰 Сумма: {payment['amount']}\n📋 Назначение: {payment['purpose']}\n\n🔗 Ссылка: {payment['erip_link']}\n\nПосле оплаты нажмите /confirm_payment"
+    await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
 @dp.message(Command("profile"))
-async def profile(message: types.Message):
+async def profile_command(message: types.Message):
     user_id = message.from_user.id
     if not db.has_accepted_agreement(user_id):
         await message.answer("⚠️ Сначала примите соглашение: /agreement")
@@ -508,7 +603,7 @@ async def profile(message: types.Message):
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
 @dp.message(Command("referral"))
-async def referral(message: types.Message):
+async def referral_command(message: types.Message):
     user_id = message.from_user.id
     if not db.has_accepted_agreement(user_id):
         await message.answer("⚠️ Сначала примите соглашение: /agreement")
@@ -522,18 +617,20 @@ async def referral(message: types.Message):
     text = f"👥 *Реферальная программа*\n\n🔗 *Ваша ссылка:*\n`{referral_link}`\n\n📊 *Статистика:*\n• Приглашено: {stats['total_referrals'] if stats else 0}\n• Активных: {stats['active_referrals'] if stats else 0}\n• Бонусных дней: {stats['bonus_days'] if stats else 0}"
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-@dp.message(Command("subscribe"))
-async def subscribe(message: types.Message):
+@dp.message(Command("support"))
+async def support_command(message: types.Message):
     user_id = message.from_user.id
     if not db.has_accepted_agreement(user_id):
         await message.answer("⚠️ Сначала примите соглашение: /agreement")
         return
     if not db.get_user(user_id):
-        await message.answer("Вы не зарегистрированы. Напишите /start")
+        await message.answer("Сначала зарегистрируйтесь: /start")
         return
-    payment = generate_erip_payment(user_id)
-    text = f"💳 *Оформление подписки*\n\n💳 Номер карты: {payment['receiver_card']}\n🏦 Банк: {payment['receiver_bank']}\n💰 Сумма: {payment['amount']}\n📋 Назначение: {payment['purpose']}\n\n🔗 Ссылка: {payment['erip_link']}\n\nПосле оплаты нажмите /confirm_payment"
-    await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+    await message.answer(
+        "🤖 *Консультант*\n\nНапишите ваш вопрос. Если я не смогу ответить — переключу на эксперта.",
+        parse_mode="Markdown",
+        reply_markup=main_menu(user_id)
+    )
 
 @dp.message(Command("confirm"))
 async def confirm_payment(message: types.Message):
@@ -570,17 +667,6 @@ async def approve_payment(message: types.Message):
     db.update_user(user_id, {"status": "active", "subscription_end": subscription_end})
     await bot.send_message(user_id, f"✅ *Платёж подтверждён!* Подписка активна до {subscription_end}.", parse_mode="Markdown")
     await message.answer(f"✅ Платёж подтверждён! Пользователь {user_id} активирован до {subscription_end}")
-
-@dp.message(Command("support"))
-async def support(message: types.Message):
-    user_id = message.from_user.id
-    if not db.has_accepted_agreement(user_id):
-        await message.answer("⚠️ Сначала примите соглашение: /agreement")
-        return
-    if not db.get_user(user_id):
-        await message.answer("Сначала зарегистрируйтесь: /start")
-        return
-    await message.answer("🤖 *Консультант*\n\nНапишите ваш вопрос. Если я не смогу ответить — переключу на эксперта.", parse_mode="Markdown", reply_markup=main_menu(user_id))
 
 @dp.message(Command("connect"))
 async def connect_to_expert(message: types.Message):
@@ -661,6 +747,22 @@ async def admin_user_detail(message: types.Message):
     for payment in user.get("payment_history", [])[-5:]:
         text += f"\n• {payment.get('date')}: {payment.get('amount')} BYN ({payment.get('status')})"
     await message.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("lang"))
+async def change_language_command(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru")],
+        [InlineKeyboardButton(text="🇧🇾 Беларуская", callback_data="lang_be")],
+        [InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")],
+        [InlineKeyboardButton(text="🇵🇱 Polski", callback_data="lang_pl")],
+        [InlineKeyboardButton(text="🇺🇦 Українська", callback_data="lang_ua")],
+        [InlineKeyboardButton(text="🇱🇹 Lietuvių", callback_data="lang_lt")]
+    ])
+    await message.answer(
+        "🌍 *Выберите язык / Choose language:*",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
 
 @dp.message()
 async def handle_messages(message: types.Message):
@@ -838,7 +940,7 @@ async def check_spam(user_id):
     USER_LAST_MESSAGE[user_id] = now
     return False
 
-# ==================== КОМАНДА /START (НОВАЯ ВЕРСИЯ) ====================
+# ==================== КОМАНДА /START ====================
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -846,10 +948,8 @@ async def start(message: types.Message):
     username = message.from_user.username or "без username"
     first_name = message.from_user.first_name or "пользователь"
     
-    # Проверяем, есть ли пользователь в базе
     user = db.get_user(user_id)
     
-    # Если пользователь уже принял соглашение — сразу показываем главное меню
     if user and db.has_accepted_agreement(user_id):
         lang = get_user_lang(user_id)
         await message.answer(
@@ -860,8 +960,6 @@ async def start(message: types.Message):
         )
         return
     
-    # Если пользователь НЕ принял соглашение — показываем приветствие
-    # Проверяем, есть ли реферал
     args = message.text.split()
     referral_id = None
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -870,7 +968,6 @@ async def start(message: types.Message):
         except:
             pass
     
-    # Если пользователь новый — регистрируем
     if not user:
         new_user = {
             "id": user_id, "username": username, "first_name": first_name,
@@ -882,7 +979,6 @@ async def start(message: types.Message):
         }
         db.add_user(new_user)
         
-        # Если есть реферал — даём бонус
         if referral_id and is_valid_referral(referral_id, user_id):
             db.update_user(user_id, {"trial_end": (datetime.now() + timedelta(days=TRIAL_DAYS + 3)).isoformat()})
             db.add_referral(referral_id, user_id)
@@ -891,7 +987,6 @@ async def start(message: types.Message):
             except:
                 pass
     
-    # Показываем приветствие с преимуществами
     await message.answer(
         WELCOME_TEXT,
         parse_mode="Markdown",
@@ -1083,7 +1178,7 @@ async def get_banks_callback(callback: types.CallbackQuery):
 
 # ==================== ОСТАЛЬНЫЕ КОМАНДЫ ====================
 
-@dp.callback_query(lambda c: c.data == "lang_")
+@dp.callback_query(lambda c: c.data == "change_lang")
 async def show_languages(callback: types.CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
@@ -1177,10 +1272,112 @@ async def analysis(callback: types.CallbackQuery):
     text = (f"📈 *Анализ рынка*\n\n🇺🇸 USD/BYN: {usd_rate}\n🇪🇺 EUR/BYN: {eur_rate}\n🇷🇺 USD/RUB: {forex.get('usd_rub', '—')}\n🌍 DXY: {forex.get('dxy', '—')}\n🛢️ Brent: {forex.get('brent', '—')}\n🇪🇺 EUR/USD: {forex.get('eur_usd', '—')}\n\n💡 *Влияние на курс BYN:*\n• Российский рубль — ключевой фактор\n• Цена нефти влияет на RUB\n• 20-е числа — налоговый период\n• Корреляция с USD/RUB: 0.89")
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-# ==================== ОСТАЛЬНЫЕ КОМАНДЫ (ПРОФИЛЬ, ПОДПИСКА, РЕФЕРАЛЫ, ПОДДЕРЖКА) ====================
+@dp.callback_query(lambda c: c.data == "subscribe")
+async def subscribe_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    payment = generate_erip_payment(user_id)
+    text = f"💳 *Оформление подписки*\n\n💳 Номер карты: {payment['receiver_card']}\n🏦 Банк: {payment['receiver_bank']}\n💰 Сумма: {payment['amount']}\n📋 Назначение: {payment['purpose']}\n\n🔗 Ссылка: {payment['erip_link']}\n\nПосле оплаты нажмите /confirm_payment"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+@dp.callback_query(lambda c: c.data == "referral")
+async def referral_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    user = db.get_user(user_id)
+    if not user:
+        await callback.message.edit_text("Вы не зарегистрированы. Напишите /start", reply_markup=main_menu(user_id))
+        return
+    
+    referral_link = f"https://t.me/byn_investor_bot?start=ref_{user_id}"
+    stats = db.get_referral_stats(user_id)
+    text = f"👥 *Реферальная программа*\n\n🔗 *Ваша ссылка:*\n`{referral_link}`\n\n📊 *Статистика:*\n• Приглашено: {stats['total_referrals'] if stats else 0}\n• Активных: {stats['active_referrals'] if stats else 0}\n• Бонусных дней: {stats['bonus_days'] if stats else 0}"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+@dp.callback_query(lambda c: c.data == "support")
+async def support_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    await callback.message.edit_text(
+        "🤖 *Консультант*\n\nНапишите ваш вопрос. Если я не смогу ответить — переключу на эксперта.",
+        parse_mode="Markdown",
+        reply_markup=main_menu(user_id)
+    )
+
+@dp.callback_query(lambda c: c.data == "profile")
+async def profile_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    
+    if not db.has_accepted_agreement(user_id):
+        await callback.message.edit_text("⚠️ Сначала примите соглашение: /agreement", reply_markup=main_menu(user_id))
+        return
+    
+    user = db.get_user(user_id)
+    if not user:
+        await callback.message.edit_text("Вы не зарегистрированы. Напишите /start", reply_markup=main_menu(user_id))
+        return
+    
+    status = get_subscription_status(user_id)
+    city = get_user_city(user_id)
+    text = f"📊 *Ваш профиль*\n\n👤 Имя: {user.get('first_name')}\n🌍 Город: {city}\n📌 Статус: {status}\n"
+    if status == "trial":
+        text += f"⏳ Пробный период до: {user.get('trial_end')}"
+    elif status == "active":
+        text += f"✅ Подписка до: {user.get('subscription_end')}"
+    else:
+        text += "❌ Подписка истекла"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+@dp.callback_query(lambda c: c.data == "agreement")
+async def agreement_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    user = db.get_user(user_id)
+    
+    if user and db.has_accepted_agreement(user_id):
+        await callback.message.edit_text(
+            "✅ Вы уже приняли соглашение.\n\n"
+            "Вы можете перечитать его ниже:",
+            parse_mode="Markdown"
+        )
+    
+    await callback.message.edit_text(
+        AGREEMENT_TEXT,
+        parse_mode="Markdown",
+        reply_markup=agreement_keyboard()
+    )
+
+@dp.message(Command("subscribe"))
+async def subscribe_command(message: types.Message):
+    user_id = message.from_user.id
+    if not db.has_accepted_agreement(user_id):
+        await message.answer("⚠️ Сначала примите соглашение: /agreement")
+        return
+    if not db.get_user(user_id):
+        await message.answer("Вы не зарегистрированы. Напишите /start")
+        return
+    payment = generate_erip_payment(user_id)
+    text = f"💳 *Оформление подписки*\n\n💳 Номер карты: {payment['receiver_card']}\n🏦 Банк: {payment['receiver_bank']}\n💰 Сумма: {payment['amount']}\n📋 Назначение: {payment['purpose']}\n\n🔗 Ссылка: {payment['erip_link']}\n\nПосле оплаты нажмите /confirm_payment"
+    await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
 @dp.message(Command("profile"))
-async def profile(message: types.Message):
+async def profile_command(message: types.Message):
     user_id = message.from_user.id
     if not db.has_accepted_agreement(user_id):
         await message.answer("⚠️ Сначала примите соглашение: /agreement")
@@ -1201,7 +1398,7 @@ async def profile(message: types.Message):
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
 @dp.message(Command("referral"))
-async def referral(message: types.Message):
+async def referral_command(message: types.Message):
     user_id = message.from_user.id
     if not db.has_accepted_agreement(user_id):
         await message.answer("⚠️ Сначала примите соглашение: /agreement")
@@ -1215,18 +1412,20 @@ async def referral(message: types.Message):
     text = f"👥 *Реферальная программа*\n\n🔗 *Ваша ссылка:*\n`{referral_link}`\n\n📊 *Статистика:*\n• Приглашено: {stats['total_referrals'] if stats else 0}\n• Активных: {stats['active_referrals'] if stats else 0}\n• Бонусных дней: {stats['bonus_days'] if stats else 0}"
     await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-@dp.message(Command("subscribe"))
-async def subscribe(message: types.Message):
+@dp.message(Command("support"))
+async def support_command(message: types.Message):
     user_id = message.from_user.id
     if not db.has_accepted_agreement(user_id):
         await message.answer("⚠️ Сначала примите соглашение: /agreement")
         return
     if not db.get_user(user_id):
-        await message.answer("Вы не зарегистрированы. Напишите /start")
+        await message.answer("Сначала зарегистрируйтесь: /start")
         return
-    payment = generate_erip_payment(user_id)
-    text = f"💳 *Оформление подписки*\n\n💳 Номер карты: {payment['receiver_card']}\n🏦 Банк: {payment['receiver_bank']}\n💰 Сумма: {payment['amount']}\n📋 Назначение: {payment['purpose']}\n\n🔗 Ссылка: {payment['erip_link']}\n\nПосле оплаты нажмите /confirm_payment"
-    await message.answer(text, parse_mode="Markdown", reply_markup=main_menu(user_id))
+    await message.answer(
+        "🤖 *Консультант*\n\nНапишите ваш вопрос. Если я не смогу ответить — переключу на эксперта.",
+        parse_mode="Markdown",
+        reply_markup=main_menu(user_id)
+    )
 
 @dp.message(Command("confirm"))
 async def confirm_payment(message: types.Message):
@@ -1263,17 +1462,6 @@ async def approve_payment(message: types.Message):
     db.update_user(user_id, {"status": "active", "subscription_end": subscription_end})
     await bot.send_message(user_id, f"✅ *Платёж подтверждён!* Подписка активна до {subscription_end}.", parse_mode="Markdown")
     await message.answer(f"✅ Платёж подтверждён! Пользователь {user_id} активирован до {subscription_end}")
-
-@dp.message(Command("support"))
-async def support(message: types.Message):
-    user_id = message.from_user.id
-    if not db.has_accepted_agreement(user_id):
-        await message.answer("⚠️ Сначала примите соглашение: /agreement")
-        return
-    if not db.get_user(user_id):
-        await message.answer("Сначала зарегистрируйтесь: /start")
-        return
-    await message.answer("🤖 *Консультант*\n\nНапишите ваш вопрос. Если я не смогу ответить — переключу на эксперта.", parse_mode="Markdown", reply_markup=main_menu(user_id))
 
 @dp.message(Command("connect"))
 async def connect_to_expert(message: types.Message):
@@ -1354,6 +1542,22 @@ async def admin_user_detail(message: types.Message):
     for payment in user.get("payment_history", [])[-5:]:
         text += f"\n• {payment.get('date')}: {payment.get('amount')} BYN ({payment.get('status')})"
     await message.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("lang"))
+async def change_language_command(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru")],
+        [InlineKeyboardButton(text="🇧🇾 Беларуская", callback_data="lang_be")],
+        [InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")],
+        [InlineKeyboardButton(text="🇵🇱 Polski", callback_data="lang_pl")],
+        [InlineKeyboardButton(text="🇺🇦 Українська", callback_data="lang_ua")],
+        [InlineKeyboardButton(text="🇱🇹 Lietuvių", callback_data="lang_lt")]
+    ])
+    await message.answer(
+        "🌍 *Выберите язык / Choose language:*",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
 
 @dp.message()
 async def handle_messages(message: types.Message):
