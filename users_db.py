@@ -19,6 +19,7 @@ class UserDB:
                     id INTEGER PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
+                    name TEXT,
                     status TEXT,
                     trial_start TEXT,
                     trial_end TEXT,
@@ -53,23 +54,51 @@ class UserDB:
             if not row:
                 return None
             user = dict(row)
+            user["user_id"] = user["id"]  # Дублируем для совместимости с админкой
             user["referrals"] = json.loads(user["referrals"] or "[]")
             user["payment_history"] = json.loads(user["payment_history"] or "[]")
             user["forecast_history"] = json.loads(user["forecast_history"] or "[]")
             user["is_blocked"] = bool(user["is_blocked"])
             user["agreement_accepted"] = bool(user["agreement_accepted"])
+            
+            # Динамический расчет оставшихся дней и статуса подписки
+            now = datetime.now()
+            sub_end = datetime.fromisoformat(user["subscription_end"]) if user.get("subscription_end") else None
+            trial_end = datetime.fromisoformat(user["trial_end"]) if user.get("trial_end") else None
+            
+            days_left = 0
+            status = "expired"
+            
+            if sub_end and sub_end > now:
+                days_left = (sub_end - now).days
+                status = "active"
+            elif trial_end and trial_end > now:
+                days_left = (trial_end - now).days
+                status = "active"
+            
+            user["days_left"] = max(0, days_left)
+            user["status"] = status
             return user
 
+    def get_all_users(self):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users")
+            user_ids = [row["id"] for row in cursor.fetchall()]
+        return [self.get_user(uid) for uid in user_ids]
+
     def add_user(self, user_data):
+        uid = user_data.get("id") or user_data.get("user_id")
+        name = user_data.get("name") or user_data.get("first_name", "Клиент")
         with self._get_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO users 
-                (id, username, first_name, status, trial_start, trial_end, subscription_end, 
+                (id, username, first_name, name, status, trial_start, trial_end, subscription_end, 
                  bonus_days, referrals, referred_by, payment_history, forecast_history, 
                  is_blocked, language, city, agreement_accepted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                user_data["id"], user_data.get("username"), user_data.get("first_name"),
+                uid, user_data.get("username"), user_data.get("first_name"), name,
                 user_data.get("status", "trial"), user_data.get("trial_start"),
                 user_data.get("trial_end"), user_data.get("subscription_end"),
                 user_data.get("bonus_days", 0), json.dumps(user_data.get("referrals", [])),
