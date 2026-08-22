@@ -2,14 +2,12 @@ import os
 import logging
 from datetime import datetime, timedelta
 from aiogram import Router, types, F, Bot
-from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from users_db import UserDB
 
 db = UserDB()
 admin_router = Router()
 
-# Получаем ID администратора из переменных окружения
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 8064308550))
 
 def is_admin(user_id: int) -> bool:
@@ -24,16 +22,14 @@ def check_user_access(user_id: int) -> bool:
     if is_admin(user_id):
         return True
 
-    for user in db.data.get("users", []):
-        if user.get("user_id") == user_id:
-            status = user.get("status", "expired")
-            days_left = user.get("days_left", 0)
-            
-            if status == "active" and days_left > 0:
-                return True
-            break
-            
-    return False
+    user = db.get_user(user_id)
+    if not user:
+        return False
+        
+    status = user.get("status", "expired")
+    days_left = user.get("days_left", 0)
+    
+    return status == "active" and days_left > 0
 
 def get_admin_reply_keyboard() -> types.ReplyKeyboardMarkup:
     """Эргономичная клавиатура только для администратора."""
@@ -56,7 +52,7 @@ def get_enhanced_financial_stats():
     
     active_subscriptions = 0
     expired_users = 0
-    users_list = db.data.get("users", [])
+    users_list = db.get_all_users()
     total_users = len(users_list)
 
     now = datetime.now()
@@ -80,9 +76,7 @@ def get_enhanced_financial_stats():
             except Exception:
                 continue
 
-        status = user.get("status", "expired")
-        days_left = user.get("days_left", 0)
-        if status == "active" and days_left > 0:
+        if user.get("status") == "active" and user.get("days_left", 0) > 0:
             active_subscriptions += 1
         else:
             expired_users += 1
@@ -104,7 +98,7 @@ async def admin_manage_users(message: types.Message):
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
 
-    users = db.data.get("users", [])
+    users = db.get_all_users()
     if not users:
         await message.answer("📭 База клиентов пуста.")
         return
@@ -113,8 +107,8 @@ async def admin_manage_users(message: types.Message):
     builder = InlineKeyboardBuilder()
 
     for user in users[:15]:
-        uid = user.get("user_id")
-        name = user.get("name", "Клиент")
+        uid = user.get("id")
+        name = user.get("name") or user.get("first_name", "Клиент")
         days = user.get("days_left", 0)
         status = user.get("status", "expired")
         
@@ -126,14 +120,13 @@ async def admin_manage_users(message: types.Message):
     
     await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
-@admin_router.callback_query(F.data == "admin_users_list_back")
-@admin_router.callback_query(F.data == "admin_users_list")
+@admin_router.callback_query(F.data.in_({"admin_users_list_back", "admin_users_list"}))
 async def show_users_list_callback(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещен!", show_alert=True)
         return
 
-    users = db.data.get("users", [])
+    users = db.get_all_users()
     if not users:
         await callback.message.edit_text("📭 База клиентов пуста.")
         await callback.answer()
@@ -143,8 +136,8 @@ async def show_users_list_callback(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
 
     for user in users[:15]:
-        uid = user.get("user_id")
-        name = user.get("name", "Клиент")
+        uid = user.get("id")
+        name = user.get("name") or user.get("first_name", "Клиент")
         days = user.get("days_left", 0)
         status = user.get("status", "expired")
         
@@ -168,15 +161,14 @@ async def edit_user_panel(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка обработки данных.", show_alert=True)
         return
 
-    target_user = next((u for u in db.data.get("users", []) if u.get("user_id") == target_uid), None)
-
+    target_user = db.get_user(target_uid)
     if not target_user:
         await callback.answer("❌ Клиент не найден в базе!", show_alert=True)
         return
 
     text = (
         f"⚙️ **Управление клиентом:**\n"
-        f"• Имя: {target_user.get('name', 'Не указано')}\n"
+        f"• Имя: {target_user.get('name') or target_user.get('first_name', 'Не указано')}\n"
         f"• ID: `{target_uid}`\n"
         f"• Статус: *{target_user.get('status', 'expired')}*\n"
         f"• Осталось дней: **{target_user.get('days_left', 0)}**"
@@ -205,17 +197,10 @@ async def set_user_days(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка формата данных.", show_alert=True)
         return
 
-    updated = False
-    for user in db.data.get("users", []):
-        if user.get("user_id") == target_uid:
-            user["days_left"] = days_to_set
-            user["status"] = "active" if days_to_set > 0 else "expired"
-            if hasattr(db, "save") and callable(db.save):
-                db.save()
-            updated = True
-            break
-
-    if updated:
+    target_user = db.get_user(target_uid)
+    if target_user:
+        new_sub_end = (datetime.now() + timedelta(days=days_to_set)).isoformat() if days_to_set > 0 else datetime.now().isoformat()
+        db.update_user(target_uid, {"subscription_end": new_sub_end})
         await callback.answer(f"✅ Успешно! Установлено дней: {days_to_set}", show_alert=True)
         await edit_user_panel(callback)
     else:
@@ -276,13 +261,20 @@ async def approve_payment(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка подтверждения оплаты.", show_alert=True)
         return
 
-    for user in db.data.get("users", []):
-        if user.get("user_id") == target_uid:
-            user["days_left"] = user.get("days_left", 0) + days_granted
-            user["status"] = "active"
-            if hasattr(db, "save") and callable(db.save):
-                db.save()
-            break
+    target_user = db.get_user(target_uid)
+    if target_user:
+        current_end = datetime.fromisoformat(target_user["subscription_end"]) if target_user.get("subscription_end") and datetime.fromisoformat(target_user["subscription_end"]) > datetime.now() else datetime.now()
+        new_end = (current_end + timedelta(days=days_granted)).isoformat()
+        
+        # Добавляем платеж в историю
+        payments = target_user.get("payment_history", [])
+        payments.append({"date": datetime.now().isoformat(), "amount": "29.90"})
+        
+        db.update_user(target_uid, {
+            "subscription_end": new_end,
+            "status": "active",
+            "payment_history": payments
+        })
 
     try:
         await callback.bot.send_message(
