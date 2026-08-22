@@ -125,10 +125,10 @@ async def ai_handler(message: types.Message):
         return
     async with cache_lock:
         city_data = CACHE_DATA.get("banks", {}).get(db.get_city(message.from_user.id))
-if isinstance(city_data, dict):
-    all_banks = sum(city_data.values(), [])
-else:
-    all_banks = []
+        if isinstance(city_data, dict):
+            all_banks = sum(city_data.values(), [])
+        else:
+            all_banks = []
 
     forecast = await ai.generate_forecast("USD", 3.0, [], all_banks)
     await message.answer(format_forecast(forecast, db.get_city(message.from_user.id), all_banks), parse_mode="Markdown")
